@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#080808">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>THE SOCIAL CLUB · Escáner QR</title>
+
+  <style>
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0;min-height:100%;background:#050505;color:#fff;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    body{min-height:100vh;overflow-x:hidden}
+    button{font:inherit}
+    .app{width:100%;max-width:480px;min-height:100vh;margin:0 auto;padding:22px 16px 30px}
+    .brand{text-align:center;margin:4px 0 20px}
+    .brand-title{font-weight:900;letter-spacing:1.5px;font-size:21px}
+    .brand-sub{margin-top:4px;color:#8e8e8e;font-size:13px}
+    .card{background:#0c0c0c;border:1px solid #242424;border-radius:18px;padding:18px}
+    .title{font-size:19px;font-weight:900;letter-spacing:.4px}
+    .hint{margin-top:5px;color:#9c9c9c;font-size:13px;line-height:1.45}
+    .camera-wrap{position:relative;margin-top:18px;border-radius:16px;overflow:hidden;background:#000;border:1px solid #292929;aspect-ratio:3/4}
+    video{display:block;width:100%;height:100%;object-fit:cover}
+    canvas{display:none}
+    .overlay{position:absolute;inset:0;pointer-events:none;display:flex;align-items:center;justify-content:center}
+    .frame{width:70%;aspect-ratio:1;border:3px solid #39ff14;border-radius:22px;box-shadow:0 0 0 999px rgba(0,0,0,.22),0 0 22px rgba(57,255,20,.2)}
+    .scan-line{position:absolute;width:62%;height:2px;background:#39ff14;box-shadow:0 0 12px #39ff14;animation:scan 2s ease-in-out infinite}
+    @keyframes scan{0%,100%{transform:translateY(-105px);opacity:.45}50%{transform:translateY(105px);opacity:1}}
+    .status{text-align:center;margin-top:12px;color:#aaa;font-size:13px;min-height:20px}
+    .status.ok{color:#39ff14;font-weight:800}
+    .status.error{color:#ff7070;font-weight:800}
+    .actions{display:flex;gap:10px;margin-top:16px}
+    .btn{width:100%;border:0;border-radius:12px;padding:14px 16px;font-weight:900;cursor:pointer}
+    .btn-primary{background:#39ff14;color:#050505}
+    .btn-secondary{background:#151515;color:#fff;border:1px solid #303030}
+    .manual{margin-top:18px;padding-top:18px;border-top:1px solid #242424}
+    .manual label{display:block;color:#aaa;font-size:12px;font-weight:800;margin-bottom:7px}
+    .manual-row{display:flex;gap:9px}
+    input{min-width:0;flex:1;background:#080808;border:1px solid #303030;border-radius:11px;color:#fff;padding:13px 12px;text-align:center;font-size:18px;letter-spacing:1px;text-transform:uppercase;outline:none}
+    input:focus{border-color:#39ff14;box-shadow:0 0 0 2px rgba(57,255,20,.12)}
+    .small{font-size:11px;color:#666;margin-top:9px;line-height:1.4}
+    .result{margin-top:16px;display:none;border-radius:14px;padding:15px;border:1px solid #2c2c2c;background:#101010}
+    .result.show{display:block}
+    .result-title{font-weight:900}
+    .result-code{margin-top:4px;color:#39ff14;font-weight:900;letter-spacing:1px}
+    .footer{text-align:center;color:#555;font-size:11px;margin-top:18px}
+  </style>
+</head>
+
+<body>
+  <main class="app">
+    <div class="brand">
+      <div class="brand-title">THE SOCIAL CLUB</div>
+      <div class="brand-sub">Lector QR de entradas</div>
+    </div>
+
+    <section class="card">
+      <div class="title">ESCANEAR ENTRADA</div>
+      <div class="hint">Apunta la cámara al código QR de la entrada. Al detectarlo, el código se enviará automáticamente al panel de administración.</div>
+
+      <div class="camera-wrap">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="canvas"></canvas>
+        <div class="overlay">
+          <div class="frame"></div>
+          <div class="scan-line"></div>
+        </div>
+      </div>
+
+      <div id="status" class="status">Solicitando acceso a la cámara…</div>
+
+      <div class="actions">
+        <button id="closeBtn" class="btn btn-secondary" type="button">CERRAR</button>
+        <button id="restartBtn" class="btn btn-primary" type="button">REINTENTAR</button>
+      </div>
+
+      <div class="manual">
+        <label for="manualCode">RESERVA MANUAL</label>
+        <div class="manual-row">
+          <input id="manualCode" inputmode="text" autocomplete="off" placeholder="NOC-0001">
+          <button id="sendBtn" class="btn btn-primary" type="button">ENVIAR</button>
+        </div>
+        <div class="small">La validación real se realiza en el servidor de THE SOCIAL CLUB.</div>
+      </div>
+
+      <div id="result" class="result">
+        <div class="result-title">Código detectado</div>
+        <div id="resultCode" class="result-code"></div>
+      </div>
+    </section>
+
+    <div class="footer">THE SOCIAL CLUB · Escáner seguro</div>
+  </main>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', {willReadFrequently:true});
+    const statusEl = document.getElementById('status');
+    const resultEl = document.getElementById('result');
+    const resultCodeEl = document.getElementById('resultCode');
+    const manualCode = document.getElementById('manualCode');
+
+    let stream = null;
+    let running = false;
+    let detector = null;
+    let lastCode = '';
+    let lastScanAt = 0;
+
+    function setStatus(text, cls=''){
+      statusEl.textContent = text;
+      statusEl.className = 'status' + (cls ? ' ' + cls : '');
+    }
+
+    function normalizeCode(value){
+      const code = String(value || '').trim().toUpperCase();
+      return code;
+    }
+
+    function sendCode(raw){
+      const code = normalizeCode(raw);
+      if(!/^NOC-\d{4,}$/.test(code)){
+        setStatus('Código no válido. Debe tener formato NOC-XXXX.', 'error');
+        return;
+      }
+
+      if(running) stopCamera();
+
+      resultEl.classList.add('show');
+      resultCodeEl.textContent = code;
+      setStatus('QR detectado. Enviando al panel…', 'ok');
+
+      if(navigator.vibrate) navigator.vibrate(180);
+
+      // Send to the Apps Script admin window that opened this scanner.
+      if(window.opener && !window.opener.closed){
+        window.opener.postMessage({
+          type: 'TSC_QR_SCANNED',
+          code: code
+        }, '*');
+
+        setTimeout(() => {
+          try { window.close(); } catch(e) {}
+        }, 350);
+      }else{
+        // Fallback: keep the code visible if this page was opened directly.
+        setStatus('Código detectado. Vuelve al panel de administración.', 'ok');
+      }
+    }
+
+    async function startCamera(){
+      if(running) return;
+
+      if(!window.isSecureContext){
+        setStatus('Esta página debe abrirse mediante HTTPS.', 'error');
+        return;
+      }
+
+      if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+        setStatus('Este navegador no permite acceder a la cámara.', 'error');
+        return;
+      }
+
+      try{
+        setStatus('Solicitando acceso a la cámara…');
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio:false,
+          video:{
+            facingMode:{ideal:'environment'},
+            width:{ideal:1280},
+            height:{ideal:720}
+          }
+        });
+
+        video.srcObject = stream;
+        await video.play();
+
+        running = true;
+        lastCode = '';
+        lastScanAt = 0;
+
+        if('BarcodeDetector' in window){
+          try{
+            detector = new BarcodeDetector({formats:['qr_code']});
+            setStatus('Cámara activa. Apunta al QR.');
+            requestAnimationFrame(scanLoop);
+            return;
+          }catch(e){
+            detector = null;
+          }
+        }
+
+        // Fallback for browsers without BarcodeDetector.
+        setStatus('Cámara activa. Preparando lector QR…');
+        await loadJsQR();
+        requestAnimationFrame(scanLoopFallback);
+      }catch(err){
+        console.error(err);
+        stopCamera(false);
+
+        let message = 'No se pudo abrir la cámara.';
+        if(err && err.name === 'NotAllowedError'){
+          message = 'Permiso de cámara denegado. Autoriza la cámara en el navegador y pulsa REINTENTAR.';
+        }else if(err && err.name === 'NotFoundError'){
+          message = 'No se encontró una cámara disponible.';
+        }else if(err && err.name === 'NotReadableError'){
+          message = 'La cámara está siendo utilizada por otra aplicación.';
+        }else if(err && err.name === 'SecurityError'){
+          message = 'El navegador bloqueó el acceso a la cámara.';
+        }
+
+        setStatus(message, 'error');
+      }
+    }
+
+    function stopCamera(updateStatus=true){
+      running = false;
+      if(stream){
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+      video.srcObject = null;
+      if(updateStatus) setStatus('Cámara cerrada.');
+    }
+
+    async function scanLoop(){
+      if(!running || !detector) return;
+
+      try{
+        const codes = await detector.detect(video);
+        if(codes && codes.length){
+          const value = codes[0].rawValue || '';
+          if(value) handleDetected(value);
+        }
+      }catch(e){}
+
+      if(running) requestAnimationFrame(scanLoop);
+    }
+
+    function loadJsQR(){
+      return new Promise((resolve,reject)=>{
+        if(window.jsQR) return resolve();
+
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('No se pudo cargar el lector QR alternativo.'));
+        document.head.appendChild(script);
+      });
+    }
+
+    function scanLoopFallback(){
+      if(!running) return;
+
+      if(video.readyState >= 2 && video.videoWidth && video.videoHeight){
+        const maxWidth = 900;
+        const scale = Math.min(1, maxWidth / video.videoWidth);
+        canvas.width = Math.round(video.videoWidth * scale);
+        canvas.height = Math.round(video.videoHeight * scale);
+
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        try{
+          const image = ctx.getImageData(0,0,canvas.width,canvas.height);
+          const code = window.jsQR(image.data, image.width, image.height, {
+            inversionAttempts:'attemptBoth'
+          });
+          if(code && code.data) handleDetected(code.data);
+        }catch(e){}
+      }
+
+      if(running) requestAnimationFrame(scanLoopFallback);
+    }
+
+    function handleDetected(raw){
+      const code = normalizeCode(raw);
+      const now = Date.now();
+
+      if(!/^NOC-\d{4,}$/.test(code)) return;
+      if(code === lastCode && now - lastScanAt < 2500) return;
+
+      lastCode = code;
+      lastScanAt = now;
+      sendCode(code);
+    }
+
+    document.getElementById('closeBtn').addEventListener('click', () => {
+      stopCamera();
+    });
+
+    document.getElementById('restartBtn').addEventListener('click', () => {
+      resultEl.classList.remove('show');
+      startCamera();
+    });
+
+    document.getElementById('sendBtn').addEventListener('click', () => {
+      sendCode(manualCode.value);
+    });
+
+    manualCode.addEventListener('keydown', e => {
+      if(e.key === 'Enter') sendCode(manualCode.value);
+    });
+
+    // Start automatically after the page is opened.
+    startCamera();
+  </script>
+</body>
+</html>
